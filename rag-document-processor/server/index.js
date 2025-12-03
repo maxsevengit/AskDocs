@@ -23,19 +23,19 @@ function cosineSimilarity(vecA, vecB) {
   if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length !== vecB.length) {
     return 0;
   }
-  
+
   let dotProduct = 0;
   let normA = 0;
   let normB = 0;
-  
+
   for (let i = 0; i < vecA.length; i++) {
     dotProduct += vecA[i] * vecB[i];
     normA += vecA[i] * vecA[i];
     normB += vecB[i] * vecB[i];
   }
-  
+
   if (normA === 0 || normB === 0) return 0;
-  
+
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
@@ -153,7 +153,7 @@ const upload = multer({
     const fileExtension = path.extname(file.originalname).toLowerCase();
 
     if (allowedTypes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) {
-        return cb(null, true);
+      return cb(null, true);
     }
     return cb(new Error('Unsupported file type. Please upload PDF, TXT, DOCX, or EML files only.'));
   }
@@ -176,12 +176,12 @@ async function initializeRAG() {
         pineconeIndex = null;
       }
     }
-    
+
     textSplitter = new RecursiveCharacterTextSplitter({
       chunkSize: 1000,
       chunkOverlap: 200,
     });
-    
+
     // Initialize embeddings model
     try {
       embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
@@ -190,7 +190,7 @@ async function initializeRAG() {
       console.log('Failed to load embedding model, using fallback.', error);
       embedder = null;
     }
-    
+
     const embedQuery = async (text) => {
       if (typeof text !== 'string') text = String(text || '');
       if (embedder) {
@@ -209,7 +209,7 @@ async function initializeRAG() {
       embedQuery: embedQuery,
       embedDocuments: (documents) => Promise.all(documents.map(doc => embedQuery(doc))),
     };
-    
+
     // Vector store abstraction
     if (pineconeIndex) {
       vectorStore = {
@@ -244,9 +244,38 @@ async function initializeRAG() {
         }
       };
     }
-    
+
     console.log('RAG pipeline initialized successfully');
     isRAGInitialized = true;
+
+    // Re-index existing documents if using in-memory store
+    if (!pineconeIndex) {
+      console.log('Re-indexing existing documents from database...');
+      const sql = 'SELECT * FROM documents';
+      db.all(sql, [], async (err, rows) => {
+        if (err) {
+          console.error('Failed to fetch documents for re-indexing:', err);
+          return;
+        }
+
+        console.log(`Found ${rows.length} documents to re-index`);
+        for (const doc of rows) {
+          try {
+            if (fs.existsSync(doc.path)) {
+              const textContent = await extractTextFromFile(doc.path, doc.type);
+              const chunks = await textSplitter.splitDocuments([
+                { pageContent: textContent, metadata: { source: doc.path, docId: doc.id, userId: doc.user_id } }
+              ]);
+              await vectorStore.addDocuments(chunks);
+              console.log(`Re-indexed document: ${doc.name}`);
+            }
+          } catch (e) {
+            console.error(`Failed to re-index document ${doc.name}:`, e.message);
+          }
+        }
+        console.log('Finished re-indexing documents');
+      });
+    }
   } catch (error) {
     console.error('Error initializing RAG pipeline:', error);
     throw error;
@@ -364,10 +393,10 @@ app.post('/api/documents/upload', authenticateToken, upload.single('document'), 
 app.post('/api/process-query', authenticateToken, async (req, res) => {
   try {
     if (!isRAGInitialized) return res.status(503).json({ error: 'RAG pipeline not yet initialized' });
-    
+
     const { query } = req.body;
     if (!query) return res.status(400).json({ error: 'Query is required' });
-    
+
     console.log('Processing query:', query);
 
     const userDocsSql = 'SELECT id FROM documents WHERE user_id = ?';
@@ -386,10 +415,15 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
       });
     }
 
+    console.log(`Searching for query: "${query}"`);
     const allSearchResults = await vectorStore.similaritySearch(query, 20);
-    const searchResults = allSearchResults.filter(result => userDocIds.includes(result.metadata.docId)).slice(0, 5);
-    const context = searchResults.map(doc => doc.pageContent).join('\\n\\n');
-    
+    console.log(`Found ${allSearchResults.length} total matches`);
+
+    const searchResults = allSearchResults.filter(result => userDocIds.includes(result.metadata.docId)).slice(0, 8);
+    console.log(`Filtered to ${searchResults.length} user documents`);
+
+    const context = searchResults.map(doc => doc.pageContent).join('\n\n');
+
     if (!context.trim()) {
       return res.json({
         Decision: "requires_more_info",
@@ -397,57 +431,103 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
         Justification: "Could not find relevant information in your documents to answer this question."
       });
     }
-    
+
     console.log('Retrieved context from documents:', context.substring(0, 500) + '...');
 
-    const ragPrompt = `You are a document analysis assistant. Analyze the following document context and answer the user's question based ONLY on this information.
+    const ragPrompt = `You are an intelligent document analysis assistant. Your goal is to be as helpful as possible, even when the user's question is vague or brief.
+
+    Instructions:
+    1. Analyze the Document Context below carefully.
+    2. If the User Question is vague (e.g., "dental?", "surgery?", "benefits"), INFER the user's intent based on the available context. For example, "dental?" likely means "What are the dental benefits?".
+    3. Do NOT return "requires_more_info" just because the question is short. Use your best judgment to provide a relevant summary from the documents.
+    4. If the answer is partially available, provide what you found and mention any missing details.
+    5. Always be polite and professional.
+
     Document Context:
     ${context}
+
     User Question: ${query}
+
     Format your response as a JSON object with the structure: { "answer": "...", "decision": "approved/rejected/requires_more_info", "reasoning": "...", "relevant_clauses": ["..."], "limitations": "...", "confidence": "high/medium/low" }`;
 
     let finalResponse;
     try {
       const geminiResponse = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        { 
-          contents: [{ parts: [{ text: ragPrompt }] }], 
-          generationConfig: { response_mime_type: 'application/json', temperature: 0.1, max_output_tokens: 1024 } 
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+          contents: [{ parts: [{ text: ragPrompt }] }],
+          generationConfig: { temperature: 0.2, max_output_tokens: 2048 }
         },
         { headers: { 'Content-Type': 'application/json' } }
       );
-      
+
+      // Validate response structure
+      if (!geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        throw new Error('Invalid response structure from Gemini API');
+      }
+
       const responseText = geminiResponse.data.candidates[0].content.parts[0].text;
-      finalResponse = JSON.parse(responseText);
-      
-      finalResponse.Justification = finalResponse.reasoning || 'Response generated based on policy documents';
-      finalResponse.Decision = finalResponse.decision || 'requires_more_info';
-      
+      console.log('Raw Gemini response:', responseText);
+
+      // Try to extract JSON from the response (sometimes it's wrapped in markdown code blocks)
+      let jsonText = responseText.trim();
+      if (jsonText.startsWith('```json')) {
+        jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?$/g, '').trim();
+      } else if (jsonText.startsWith('```')) {
+        jsonText = jsonText.replace(/```\n?/g, '').trim();
+      }
+
+      // Parse JSON with error handling
+      let parsedResponse;
+      try {
+        parsedResponse = JSON.parse(jsonText);
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError);
+        console.error('Failed to parse text:', jsonText);
+        throw new Error('Failed to parse AI response as JSON');
+      }
+
+      // Build the final response with proper field mapping
+      finalResponse = {
+        Decision: parsedResponse.decision || 'requires_more_info',
+        Amount: null,
+        Justification: parsedResponse.reasoning || parsedResponse.answer || 'Response generated based on policy documents',
+        answer: parsedResponse.answer,
+        relevant_clauses: parsedResponse.relevant_clauses || [],
+        limitations: parsedResponse.limitations || '',
+        confidence: parsedResponse.confidence || 'medium'
+      };
+
+      // Extract amount if present in the query
       const moneyKeywords = ['amount', 'cost', 'price', 'fee', 'payout', 'coverage', 'limit'];
       if (moneyKeywords.some(k => query.toLowerCase().includes(k))) {
-        const amountMatch = (finalResponse.answer + ' ' + finalResponse.reasoning).match(/\\$[\\d,]+|₹[\\d,]+|\\b\\d+[\\d,]*\\s*(?:dollars?|rupees?|USD|INR)\\b/i);
+        const searchText = (parsedResponse.answer || '') + ' ' + (parsedResponse.reasoning || '');
+        const amountMatch = searchText.match(/\\$[\\d,]+|₹[\\d,]+|\\b\\d+[\\d,]*\\s*(?:dollars?|rupees?|USD|INR)\\b/i);
         finalResponse.Amount = amountMatch ? parseInt(amountMatch[0].replace(/[^\\d]/g, '')) || null : null;
-      } else {
-        finalResponse.Amount = null;
       }
-      
+
     } catch (e) {
-      console.warn('LLM response generation failed. Using fallback response.', e);
+      console.error('LLM response generation failed:', e.message);
+      console.error('Error details:', e.response?.data || e);
+
+      // Provide a more helpful fallback response
       finalResponse = {
         Decision: 'requires_more_info',
         Amount: null,
-        Justification: 'Technical error occurred while analyzing policy documents.'
+        Justification: `Based on the available document context, I found relevant information about your query. However, I encountered a technical issue generating a structured response. Please try rephrasing your question or contact support if this persists.`,
+        answer: 'Unable to generate a complete analysis at this time.',
+        confidence: 'low'
       };
     }
-    
+
     const historyId = uuidv4();
     const historySql = 'INSERT INTO query_history (id, user_id, query, response, timestamp) VALUES (?, ?, ?, ?, ?)';
     db.run(historySql, [historyId, req.user.id, query, JSON.stringify(finalResponse), new Date().toISOString()], (err) => {
       if (err) console.error('Failed to save query history:', err.message);
     });
-    
+
     res.json(finalResponse);
-    
+
   } catch (error) {
     console.error('Error processing query:', error.response?.data || error.message);
     res.status(500).json({ error: 'Internal server error' });
@@ -465,7 +545,7 @@ app.get('/api/query-history', authenticateToken, (req, res) => {
       try {
         return { ...row, response: JSON.parse(row.response) };
       } catch (e) {
-        return { ...row, response: { Justification: 'Error: Could not parse response.'} };
+        return { ...row, response: { Justification: 'Error: Could not parse response.' } };
       }
     });
     res.json(history);
