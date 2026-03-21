@@ -180,32 +180,7 @@ const MainApp = () => {
     loadQueryHistory();
   }, []);
 
-  const getDecisionIcon = (decision) => {
-    if (decision === 'approved') {
-      return <CheckCircle className="w-8 h-8 text-green-500" />;
-    } else if (decision === 'rejected') {
-      return <XCircle className="w-8 h-8 text-red-500" />;
-    }
-    return null;
-  };
-
-  const getDecisionColor = (decision) => {
-    if (decision === 'approved') {
-      return 'text-green-600';
-    } else if (decision === 'rejected') {
-      return 'text-red-600';
-    }
-    return 'text-gray-600';
-  };
-
-  const getDecisionBgColor = (decision) => {
-    if (decision === 'approved') {
-      return 'bg-green-50 border-green-200';
-    } else if (decision === 'rejected') {
-      return 'bg-red-50 border-red-200';
-    }
-    return 'bg-gray-50 border-gray-200';
-  };
+  // Removed medical decision helpers.
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -215,7 +190,7 @@ const MainApp = () => {
             <div className="flex-1"></div>
             <div className="flex-1 flex items-center justify-center gap-3">
                 <FileText className="w-10 h-10 text-indigo-600" />
-                <h1 className="text-4xl font-bold text-gray-800">Med-RAG</h1>
+                <h1 className="text-4xl font-bold text-gray-800">Document Analyst</h1>
             </div>
             <div className="flex-1 flex justify-end">
                 <button onClick={logout} className="flex items-center gap-2 text-gray-600 hover:text-indigo-600">
@@ -313,14 +288,14 @@ const MainApp = () => {
             <div className="space-y-4">
               <div>
                 <label htmlFor="query" className="block text-sm font-medium text-gray-700 mb-2">
-                  Describe your medical claim or question:
+                  Ask a question about your documents:
                 </label>
                 <textarea
                   id="query"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  placeholder="e.g., I need knee surgery and I'm 45 years old. I live in Mumbai and my policy is 8 months old. What's my coverage?"
+                  placeholder="e.g., What are the key points mentioned in the first chapter?"
                   className="w-full h-32 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
                   disabled={loading}
                 />
@@ -389,38 +364,40 @@ const MainApp = () => {
             )}
 
             {response && !loading && (
-              <div className={`border rounded-lg p-6 ${getDecisionBgColor(response.Decision)}`}>
-                {/* Decision Header */}
-                <div className="flex items-center gap-3 mb-4">
-                  {getDecisionIcon(response.Decision)}
-                  <div>
-                    <h3 className={`text-xl font-bold ${getDecisionColor(response.Decision)}`}>
-                      {response.Decision === 'approved' ? 'Claim Approved' : 'Claim Rejected'}
-                    </h3>
-                    <p className="text-sm text-gray-600">
-                      AI Analysis Complete
-                    </p>
-                  </div>
-                </div>
-
-                {/* Amount */}
-                {response.Amount !== null && (
-                  <div className="mb-4">
-                    <h4 className="text-sm font-medium text-gray-700 mb-1">Approved Amount:</h4>
-                    <p className="text-2xl font-bold text-green-600">
-                      ${response.Amount.toLocaleString()}
-                    </p>
-                  </div>
-                )}
-
-                {/* Justification */}
-                <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Justification:</h4>
-                  <p className="text-gray-800 leading-relaxed">
-                    {response.Justification}
+              <div className="border rounded-lg p-6 bg-white border-gray-200 shadow-sm">
+                
+                {/* Answer section */}
+                <div className="mb-6">
+                  <h4 className="text-sm font-semibold text-indigo-600 mb-2 uppercase tracking-wider">Answer</h4>
+                  <p className="text-gray-800 leading-relaxed text-lg whitespace-pre-wrap">
+                    {response.answer}
                   </p>
                 </div>
 
+                {/* Relevant Quotes */}
+                {response.relevant_quotes && response.relevant_quotes.length > 0 && (
+                  <div className="mb-4">
+                    <h4 className="text-sm font-semibold text-gray-600 mb-2 uppercase tracking-wider">Relevant Quotes</h4>
+                    <ul className="list-disc pl-5 space-y-2">
+                      {response.relevant_quotes.map((quote, idx) => (
+                        <li key={idx} className="text-gray-600 italic text-sm border-l-2 border-indigo-200 pl-3">"{quote}"</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Confidence */}
+                <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
+                  <span className="text-xs text-gray-500">Confidence Level:</span>
+                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                    response.confidence === 'high' ? 'bg-green-100 text-green-700' :
+                    response.confidence === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                    'bg-red-100 text-red-700'
+                  }`}>
+                    {response.confidence ? response.confidence.toUpperCase() : 'UNKNOWN'}
+                  </span>
+                </div>
+                
                 {/* Raw Response */}
                 <details className="mt-6">
                   <summary className="text-sm font-medium text-gray-600 cursor-pointer hover:text-gray-800">
@@ -437,16 +414,16 @@ const MainApp = () => {
               <div className="text-center py-12 text-gray-500">
                 <FileText className="w-16 h-16 mx-auto mb-4 text-gray-300" />
                 <p className="text-lg">Submit a query to see AI analysis results</p>
-                <p className="text-sm">The system will analyze your query against policy documents and provide a decision</p>
+                <p className="text-sm">The system will analyze your query against your documents and provide a comprehensive answer</p>
               </div>
             )}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="text-center mt-12 text-gray-500 text-sm">
-          <p>Powered by Gemini API, LangChain, and ChromaDB</p>
-          <p className="mt-1">Medical Insurance Claims Processing System</p>
+        <div className="text-center mt-12 text-gray-500 text-sm pb-8">
+          <p>Powered by Gemini API, LangChain, and ChromaDB/Pinecone</p>
+          <p className="mt-1">Universal Document RAG Analyst</p>
         </div>
       </div>
     </div>

@@ -10,12 +10,12 @@ const { simpleParser } = require('mailparser');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { db, initDb } = require('./database');
+const { db, initDb, pool } = require('./database');
 
 let pineconeClient = null;
 let pineconeIndex = null;
 const { RecursiveCharacterTextSplitter } = require('langchain/text_splitter');
-const { pipeline } = require('@xenova/transformers');
+// pipeline dynamically imported later
 const axios = require('axios');
 
 // Helper function for cosine similarity
@@ -116,11 +116,7 @@ app.post('/api/auth/login', (req, res) => {
 let vectorStore;
 let isRAGInitialized = false;
 
-// Reusable components
-let embedder = null;
-let embeddings = null;
-let textSplitter = null;
-let indexedDocuments = []; // In-memory fallback for vector store
+
 
 // Ensure uploads directory exists
 const uploadsDir = path.resolve(__dirname, 'uploads');
@@ -163,19 +159,7 @@ const upload = multer({
 async function initializeRAG() {
   try {
     console.log('Initializing RAG pipeline...');
-    // Optional Pinecone setup
-    if (process.env.PINECONE_API_KEY && process.env.PINECONE_INDEX && process.env.PINECONE_ENVIRONMENT) {
-      try {
-        const { Pinecone } = require('@pinecone-database/pinecone');
-        pineconeClient = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-        pineconeIndex = pineconeClient.index(process.env.PINECONE_INDEX);
-        console.log('Pinecone client initialized');
-      } catch (e) {
-        console.warn('Failed to initialize Pinecone. Falling back to in-memory vector store.', e.message);
-        pineconeClient = null;
-        pineconeIndex = null;
-      }
-    }
+    console.log('Using pgvector for vector store.');
 
     textSplitter = new RecursiveCharacterTextSplitter({
       chunkSize: 1000,
@@ -184,6 +168,8 @@ async function initializeRAG() {
 
     // Initialize embeddings model
     try {
+      const transformers = await import('@xenova/transformers');
+      const pipeline = transformers.pipeline;
       embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
       console.log('Embedding model loaded successfully');
     } catch (error) {
@@ -210,72 +196,50 @@ async function initializeRAG() {
       embedDocuments: (documents) => Promise.all(documents.map(doc => embedQuery(doc))),
     };
 
-    // Vector store abstraction
-    if (pineconeIndex) {
-      vectorStore = {
-        addDocuments: async (docsToAdd) => {
-          const vectors = [];
+    // Vector store abstraction using pgvector
+    vectorStore = {
+      addDocuments: async (docsToAdd) => {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
           for (const d of docsToAdd) {
             const embedding = await embeddings.embedQuery(d.pageContent);
-            vectors.push({ id: `${d.metadata.docId}-${vectors.length}-${Date.now()}`, values: embedding, metadata: { ...d.metadata, content: d.pageContent } });
+            const chunkId = uuidv4();
+            const embeddingStr = `[${embedding.join(',')}]`;
+            await client.query(
+              'INSERT INTO document_chunks (id, doc_id, user_id, content, embedding) VALUES ($1, $2, $3, $4, $5)',
+              [chunkId, d.metadata.docId, d.metadata.userId, d.pageContent, embeddingStr]
+            );
           }
-          if (vectors.length > 0) await pineconeIndex.upsert(vectors);
-        },
-        similaritySearch: async (query, k) => {
-          const queryEmbedding = await embeddings.embedQuery(query);
-          const result = await pineconeIndex.query({ vector: queryEmbedding, topK: k, includeMetadata: true });
-          return (result.matches || []).map(m => ({ pageContent: m.metadata?.content || '', metadata: m.metadata || {} }));
+          await client.query('COMMIT');
+        } catch (e) {
+          await client.query('ROLLBACK');
+          console.error('Failed to insert chunks to pgvector:', e);
+        } finally {
+          client.release();
         }
-      };
-    } else {
-      vectorStore = {
-        addDocuments: async (docsToAdd) => {
-          for (const d of docsToAdd) {
-            const embedding = await embeddings.embedQuery(d.pageContent);
-            indexedDocuments.push({ content: d.pageContent, embedding, metadata: d.metadata });
-          }
-        },
-        similaritySearch: async (query, k) => {
-          const queryEmbedding = await embeddings.embedQuery(query);
-          const similarities = indexedDocuments
-            .map(doc => ({ ...doc, similarity: cosineSimilarity(queryEmbedding, doc.embedding) }))
-            .sort((a, b) => b.similarity - a.similarity);
-          return similarities.slice(0, k).map(doc => ({ pageContent: doc.content, metadata: doc.metadata }));
-        }
-      };
-    }
+      },
+      similaritySearch: async (query, k) => {
+        const queryEmbedding = await embeddings.embedQuery(query);
+        const embeddingStr = `[${queryEmbedding.join(',')}]`;
+        const sql = `
+          SELECT content, doc_id, user_id
+          FROM document_chunks
+          ORDER BY embedding <=> $1
+          LIMIT $2;
+        `;
+        const result = await pool.query(sql, [embeddingStr, k]);
+        return result.rows.map(row => ({
+          pageContent: row.content,
+          metadata: { docId: row.doc_id, userId: row.user_id }
+        }));
+      }
+    };
 
     console.log('RAG pipeline initialized successfully');
     isRAGInitialized = true;
 
-    // Re-index existing documents if using in-memory store
-    if (!pineconeIndex) {
-      console.log('Re-indexing existing documents from database...');
-      const sql = 'SELECT * FROM documents';
-      db.all(sql, [], async (err, rows) => {
-        if (err) {
-          console.error('Failed to fetch documents for re-indexing:', err);
-          return;
-        }
 
-        console.log(`Found ${rows.length} documents to re-index`);
-        for (const doc of rows) {
-          try {
-            if (fs.existsSync(doc.path)) {
-              const textContent = await extractTextFromFile(doc.path, doc.type);
-              const chunks = await textSplitter.splitDocuments([
-                { pageContent: textContent, metadata: { source: doc.path, docId: doc.id, userId: doc.user_id } }
-              ]);
-              await vectorStore.addDocuments(chunks);
-              console.log(`Re-indexed document: ${doc.name}`);
-            }
-          } catch (e) {
-            console.error(`Failed to re-index document ${doc.name}:`, e.message);
-          }
-        }
-        console.log('Finished re-indexing documents');
-      });
-    }
   } catch (error) {
     console.error('Error initializing RAG pipeline:', error);
     throw error;
@@ -348,8 +312,6 @@ app.delete('/api/documents/:id', authenticateToken, (req, res) => {
       if (doc.path && fs.existsSync(doc.path)) {
         fs.unlinkSync(doc.path);
       }
-      // TODO: Remove from vector index
-      indexedDocuments = indexedDocuments.filter(d => d.metadata?.docId !== id);
       res.json({ success: true });
     });
   });
@@ -409,9 +371,9 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
 
     if (userDocIds.length === 0) {
       return res.json({
-        Decision: "requires_more_info",
-        Amount: null,
-        Justification: "No documents have been uploaded yet. Please upload your policy documents first."
+        answer: "No documents have been uploaded yet. Please upload your documents first.",
+        relevant_quotes: [],
+        confidence: "low"
       });
     }
 
@@ -426,29 +388,28 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
 
     if (!context.trim()) {
       return res.json({
-        Decision: "requires_more_info",
-        Amount: null,
-        Justification: "Could not find relevant information in your documents to answer this question."
+        answer: "Could not find relevant information in your documents to answer this question.",
+        relevant_quotes: [],
+        confidence: "low"
       });
     }
 
     console.log('Retrieved context from documents:', context.substring(0, 500) + '...');
 
-    const ragPrompt = `You are an intelligent document analysis assistant. Your goal is to be as helpful as possible, even when the user's question is vague or brief.
+    const ragPrompt = `You are an intelligent document analysis assistant. Your goal is to be as helpful as possible, using the provided document context to answer the user's question.
 
     Instructions:
     1. Analyze the Document Context below carefully.
-    2. If the User Question is vague (e.g., "dental?", "surgery?", "benefits"), INFER the user's intent based on the available context. For example, "dental?" likely means "What are the dental benefits?".
-    3. Do NOT return "requires_more_info" just because the question is short. Use your best judgment to provide a relevant summary from the documents.
-    4. If the answer is partially available, provide what you found and mention any missing details.
-    5. Always be polite and professional.
+    2. Answer the user's question accurately based ONLY on the provided context.
+    3. If the answer is not in the context, explicitly state that you cannot find the answer in the provided documents.
+    4. Always be polite and professional.
 
     Document Context:
     ${context}
 
     User Question: ${query}
 
-    Format your response as a JSON object with the structure: { "answer": "...", "decision": "approved/rejected/requires_more_info", "reasoning": "...", "relevant_clauses": ["..."], "limitations": "...", "confidence": "high/medium/low" }`;
+    Format your response as a JSON object with the strict structure: { "answer": "...", "relevant_quotes": ["..."], "confidence": "high/medium/low" }`;
 
     let finalResponse;
     try {
@@ -456,7 +417,7 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
         {
           contents: [{ parts: [{ text: ragPrompt }] }],
-          generationConfig: { temperature: 0.2, max_output_tokens: 2048 }
+          generationConfig: { temperature: 0.2, maxOutputTokens: 2048, responseMimeType: "application/json" }
         },
         { headers: { 'Content-Type': 'application/json' } }
       );
@@ -489,22 +450,10 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
 
       // Build the final response with proper field mapping
       finalResponse = {
-        Decision: parsedResponse.decision || 'requires_more_info',
-        Amount: null,
-        Justification: parsedResponse.reasoning || parsedResponse.answer || 'Response generated based on policy documents',
-        answer: parsedResponse.answer,
-        relevant_clauses: parsedResponse.relevant_clauses || [],
-        limitations: parsedResponse.limitations || '',
+        answer: parsedResponse.answer || 'Could not generate a specific answer. Please try rephrasing.',
+        relevant_quotes: parsedResponse.relevant_quotes || [],
         confidence: parsedResponse.confidence || 'medium'
       };
-
-      // Extract amount if present in the query
-      const moneyKeywords = ['amount', 'cost', 'price', 'fee', 'payout', 'coverage', 'limit'];
-      if (moneyKeywords.some(k => query.toLowerCase().includes(k))) {
-        const searchText = (parsedResponse.answer || '') + ' ' + (parsedResponse.reasoning || '');
-        const amountMatch = searchText.match(/\\$[\\d,]+|₹[\\d,]+|\\b\\d+[\\d,]*\\s*(?:dollars?|rupees?|USD|INR)\\b/i);
-        finalResponse.Amount = amountMatch ? parseInt(amountMatch[0].replace(/[^\\d]/g, '')) || null : null;
-      }
 
     } catch (e) {
       console.error('LLM response generation failed:', e.message);
@@ -512,10 +461,8 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
 
       // Provide a more helpful fallback response
       finalResponse = {
-        Decision: 'requires_more_info',
-        Amount: null,
-        Justification: `Based on the available document context, I found relevant information about your query. However, I encountered a technical issue generating a structured response. Please try rephrasing your question or contact support if this persists.`,
-        answer: 'Unable to generate a complete analysis at this time.',
+        answer: 'I found relevant information but encountered a technical issue formatting the response. Please try rephrasing.',
+        relevant_quotes: [],
         confidence: 'low'
       };
     }

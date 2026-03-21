@@ -7,7 +7,7 @@ export const useAuth = () => useContext(AuthContext);
 
 // Create a configured axios instance
 const apiClient = axios.create({
-  baseURL: 'http://localhost:3001',
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3001',
 });
 
 // Add a request interceptor to include the token in all requests
