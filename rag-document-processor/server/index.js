@@ -71,20 +71,20 @@ const authenticateToken = (req, res, next) => {
 
 // --- AUTH ROUTES ---
 app.post('/api/auth/signup', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
+  const { email, username, password } = req.body;
+  if (!email || !username || !password) {
+    return res.status(400).json({ error: 'Email, username, and password are required' });
   }
 
   const salt = bcrypt.genSaltSync(10);
   const password_hash = bcrypt.hashSync(password, salt);
   const id = uuidv4();
 
-  const sql = 'INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)';
-  db.run(sql, [id, email, password_hash], function (err) {
+  const sql = 'INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)';
+  db.run(sql, [id, username, email, password_hash], function (err) {
     if (err) {
       console.error('Signup error:', err.message);
-      return res.status(500).json({ error: 'Email may already be in use.' });
+      return res.status(500).json({ error: 'Email or Username may already be in use.' });
     }
     res.status(201).json({ message: 'User created successfully' });
   });
@@ -107,8 +107,64 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token });
+    const token = jwt.sign({ id: user.id, email: user.email, username: user.username }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ token, user: { id: user.id, email: user.email, username: user.username } });
+  });
+});
+
+app.get('/api/auth/me', authenticateToken, (req, res) => {
+  const sql = 'SELECT id, email, username FROM users WHERE id = ?';
+  db.get(sql, [req.user.id], (err, user) => {
+    if (err || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(user);
+  });
+});
+
+app.put('/api/auth/profile', authenticateToken, (req, res) => {
+  const { currentPassword, newPassword, newUsername } = req.body;
+  const userId = req.user.id;
+
+  if (!currentPassword) {
+    return res.status(400).json({ error: 'Current password is required to make changes.' });
+  }
+
+  const sql = 'SELECT * FROM users WHERE id = ?';
+  db.get(sql, [userId], (err, user) => {
+    if (err || !user) return res.status(404).json({ error: 'User not found' });
+
+    const isMatch = bcrypt.compareSync(currentPassword, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Incorrect current password.' });
+    }
+
+    const updates = [];
+    const params = [];
+    
+    if (newUsername && newUsername !== user.username) {
+      updates.push('username = ?');
+      params.push(newUsername);
+    }
+    
+    if (newPassword && newPassword.length > 0) {
+      const salt = bcrypt.genSaltSync(10);
+      updates.push('password_hash = ?');
+      params.push(bcrypt.hashSync(newPassword, salt));
+    }
+
+    if (updates.length === 0) {
+      return res.json({ message: 'No changes made.' });
+    }
+
+    params.push(userId);
+    const updateSql = "UPDATE users SET " + updates.join(', ') + " WHERE id = ?";
+    db.run(updateSql, params, function (updateErr) {
+      if (updateErr) return res.status(500).json({ error: 'Failed to update profile.' });
+      
+      const newJwtToken = jwt.sign({ id: user.id, email: user.email, username: newUsername || user.username }, JWT_SECRET, { expiresIn: '24h' });
+      res.json({ message: 'Profile updated successfully', token: newJwtToken, user: { id: user.id, email: user.email, username: newUsername || user.username } });
+    });
   });
 });
 

@@ -46,6 +46,7 @@ const initDb = async () => {
   const usersSchema = `
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
+      username TEXT,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL
     );
@@ -93,6 +94,7 @@ const initDb = async () => {
       await client.query('BEGIN');
       await client.query('CREATE EXTENSION IF NOT EXISTS vector;');
       await client.query(usersSchema);
+      await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;');
       await client.query(documentsSchema);
       await client.query(queryHistorySchema);
       await client.query(documentChunksSchema);
