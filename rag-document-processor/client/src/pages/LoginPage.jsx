@@ -44,54 +44,62 @@ const LoginPage = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 font-sans">
-      <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-900/10 blur-[120px] rounded-full"></div>
-      </div>
-      <div className="relative z-10 max-w-md w-full bg-slate-900/40 p-8 rounded-xl border border-white/5 backdrop-blur-xl">
-        <h2 className="text-2xl font-bold text-center mb-6 text-white tracking-tight">Login</h2>
-        {error && <p className="bg-red-900/40 border border-red-500/20 text-red-400 p-3 rounded-lg mb-4 text-sm font-medium">{error}</p>}
-        <form onSubmit={handleSubmit}>
-          <div className="mb-4">
-            <label className="block text-slate-400 text-sm font-medium mb-1.5 uppercase tracking-wider">Email</label>
+    <div className="min-h-screen flex items-center justify-center bg-[#060e20] font-sans relative overflow-hidden">
+      {/* Background Glows */}
+      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-900/10 blur-[120px] rounded-full pointer-events-none"></div>
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-cyan-900/5 blur-[120px] rounded-full pointer-events-none"></div>
+
+      <div className="relative z-10 max-w-md w-full glass-card p-10 rounded-[2.5rem] bg-[#0f192f]/40">
+        <div className="text-center mb-8">
+           <h1 className="text-3xl font-bold text-white tracking-tighter mb-2">Accounting AI</h1>
+           <p className="text-xs uppercase tracking-[0.2em] text-slate-500 font-bold">Secure Intelligence Layer</p>
+        </div>
+
+        {error && <p className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-2xl mb-6 text-xs font-medium text-center animate-shake">{error}</p>}
+        
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div>
+            <label className="block text-slate-500 text-[10px] font-bold mb-2 uppercase tracking-widest ml-1">Work Email</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2.5 bg-slate-800/50 border border-white/5 rounded-lg text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-colors"
+              placeholder="name@company.com"
+              className="w-full input-glass px-5 py-3.5 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none text-sm transition-all"
               required
             />
           </div>
-          <div className="mb-6">
-            <label className="block text-slate-400 text-sm font-medium mb-1.5 uppercase tracking-wider">Password</label>
+          <div>
+            <label className="block text-slate-500 text-[10px] font-bold mb-2 uppercase tracking-widest ml-1">Access Key</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2.5 bg-slate-800/50 border border-white/5 rounded-lg text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-colors"
+              placeholder="••••••••"
+              className="w-full input-glass px-5 py-3.5 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none text-sm transition-all"
               required
             />
           </div>
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-indigo-600 font-medium tracking-wide text-white py-2.5 rounded-xl hover:bg-indigo-500 transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)] disabled:opacity-50"
+            className="w-full btn-primary-gradient font-bold tracking-wider py-4 rounded-2xl transition-all shadow-xl disabled:opacity-30 disabled:cursor-not-allowed mt-4 text-sm"
           >
-            {loading ? 'Signing in...' : 'Login'}
+            {loading ? 'Authenticating...' : 'Sign In'}
           </button>
         </form>
 
-        <div className="mt-6 flex items-center justify-center space-x-2">
-          <span className="h-px w-full bg-white/10"></span>
-          <span className="text-slate-500 text-sm font-medium">OR</span>
-          <span className="h-px w-full bg-white/10"></span>
+        <div className="mt-8 flex items-center justify-center space-x-4">
+          <span className="h-px w-full bg-white/5"></span>
+          <span className="text-slate-600 text-[10px] font-bold tracking-widest">OR</span>
+          <span className="h-px w-full bg-white/5"></span>
         </div>
 
         <button
           onClick={handleGoogleLogin}
           disabled={loading}
           type="button"
-          className="mt-6 w-full flex items-center justify-center gap-3 bg-white text-slate-900 py-2.5 rounded-xl hover:bg-slate-100 transition-colors font-medium shadow-md disabled:opacity-50"
+          className="mt-8 w-full flex items-center justify-center gap-3 bg-white/5 border border-white/5 text-slate-300 py-3.5 rounded-2xl hover:bg-white/10 transition-all text-sm font-bold shadow-sm disabled:opacity-30"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -102,8 +110,8 @@ const LoginPage = () => {
           Continue with Google
         </button>
 
-        <p className="text-center mt-6 text-slate-400 text-sm">
-          Don't have an account? <Link to="/signup" className="text-indigo-400 hover:text-indigo-300 transition-colors font-medium">Sign up</Link>
+        <p className="text-center mt-8 text-slate-500 text-xs font-medium">
+          New to the platform? <Link to="/signup" className="text-cyan-400 hover:text-cyan-300 transition-colors font-bold ml-1">Request Access</Link>
         </p>
       </div>
     </div>

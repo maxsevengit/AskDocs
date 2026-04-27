@@ -45,7 +45,9 @@ const MainApp = () => {
 
     setLoading(true);
     setError('');
-    setResponse(null);
+    // We don't clear response immediately to allow a smooth transition
+    // but we can clear it if we want a fresh start
+    // setResponse(null); 
 
     try {
       const result = await apiClient.post('/api/process-query', {
@@ -167,7 +169,6 @@ const MainApp = () => {
   const viewDocument = async (documentId) => {
     try {
       const response = await apiClient.get(`/api/documents/${documentId}/content`);
-      // For now, just show the content in an alert. In a real app, you'd show this in a modal
       alert(`Document Content:\n\n${response.data.content}`);
     } catch (error) {
       console.error('Failed to view document:', error);
@@ -181,262 +182,234 @@ const MainApp = () => {
     loadQueryHistory();
   }, []);
 
-  // Removed medical decision helpers.
-
   return (
-    <div className="min-h-screen bg-slate-950 font-sans text-slate-200">
-      <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-900/10 blur-[120px] rounded-full"></div>
-      </div>
-      <div className="relative z-10 max-w-7xl mx-auto p-4 md:p-8 pt-6">
-        {/* Header */}
-        <header className="flex flex-col md:flex-row justify-between items-center gap-6 mb-8 border-b border-white/5 pb-6">
-            <div className="flex items-center gap-3">
-                <div className="bg-indigo-500/10 p-2.5 rounded-xl border border-indigo-500/20">
-                    <FileText className="w-8 h-8 text-indigo-400" />
-                </div>
-                <div>
-                  <h1 className="text-2xl font-bold text-white tracking-tight">Document Analyst</h1>
-                  <p className="text-sm text-slate-400 mt-1">Universal RAG Workspace</p>
-                </div>
+    <div className="flex h-screen bg-[#060e20] font-sans text-[#dde5ff] overflow-hidden">
+      {/* 1. Left Sidebar: Navigation & Document Management */}
+      <aside className="w-80 glass-panel flex flex-col border-r border-white/5 shrink-0">
+        <div className="p-6 border-b border-white/5">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="bg-cyan-500/10 p-2.5 rounded-xl border border-cyan-500/20">
+              <FileText className="w-6 h-6 text-cyan-400" />
             </div>
-            <div className="flex items-center gap-4">
-                <Link to="/profile" className="text-indigo-300 hover:text-indigo-200 transition-colors flex items-center gap-2 text-sm font-medium bg-indigo-500/10 px-4 py-2 rounded-xl border border-indigo-500/20 shadow-[0_0_15px_rgba(79,70,229,0.1)]">
-                    <User className="w-4 h-4"/> <span className="hidden sm:inline">{user?.username || 'Profile'}</span>
-                </Link>
-                <button onClick={logout} className="text-slate-400 hover:text-red-400 transition-colors flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-xl hover:bg-slate-900/50 border border-transparent hover:border-red-500/20">
-                    <LogOut className="w-4 h-4" />
-                    <span className="hidden sm:inline">Sign Out</span>
-                </button>
+            <div>
+              <h1 className="text-lg font-bold text-white tracking-tight">Accounting AI</h1>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Financial Intelligence</p>
             </div>
+          </div>
+
+          <div className="space-y-1">
+             <Link to="/profile" className="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-all text-sm font-medium text-slate-400 hover:text-white">
+                <User className="w-4 h-4" /> Profile
+             </Link>
+             <button onClick={logout} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-red-500/5 transition-all text-sm font-medium text-slate-400 hover:text-red-400">
+                <LogOut className="w-4 h-4" /> Sign Out
+             </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          {/* Upload Area */}
+          <div>
+            <h3 className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-4 px-2">Knowledge Base</h3>
+            <div 
+              className={`p-4 rounded-2xl border border-dashed border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/10 transition-all cursor-pointer text-center group ${uploading ? 'opacity-50' : ''}`}
+              onClick={() => !uploading && fileInputRef.current?.click()}
+            >
+              <Upload className="w-6 h-6 text-cyan-400 mx-auto mb-2 group-hover:scale-110 transition-transform" />
+              <p className="text-xs font-semibold text-cyan-300">Upload Standards</p>
+              <p className="text-[10px] text-slate-500 mt-1">PDF, DOCX, TXT, EML</p>
+              <input ref={fileInputRef} type="file" multiple hidden onChange={handleFileUpload} />
+              
+              {uploading && (
+                <div className="mt-3 w-full bg-slate-800 rounded-full h-1 overflow-hidden">
+                  <div className="bg-cyan-400 h-full transition-all" style={{ width: `${uploadProgress}%` }}></div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Documents List */}
+          <div>
+            <h3 className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-3 px-2">Source Library ({documents.length})</h3>
+            <div className="space-y-2">
+              {documents.map((doc) => (
+                <div key={doc.id} className="group flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5 hover:border-cyan-500/30 transition-all">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-slate-300 truncate">{doc.name}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">{(doc.size / 1024).toFixed(1)} KB</p>
+                  </div>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => viewDocument(doc.id)} className="p-1.5 text-slate-400 hover:text-cyan-400"><Eye className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => deleteDocument(doc.id)} className="p-1.5 text-slate-400 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                </div>
+              ))}
+              {documents.length === 0 && <p className="text-[10px] text-slate-600 italic text-center py-4">No documents uploaded.</p>}
+            </div>
+          </div>
+        </div>
+
+        {/* User Badge */}
+        <div className="p-4 border-t border-white/5 bg-black/20">
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/5">
+            <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-xs font-bold text-white uppercase">
+              {user?.username?.charAt(0) || 'U'}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-white truncate">{user?.username}</p>
+              <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* 2. Center: AI Chat Interface */}
+      <main className="flex-1 flex flex-col relative bg-[#060e20]">
+        {/* Background Glow */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-4xl h-96 bg-indigo-900/10 blur-[120px] rounded-full pointer-events-none"></div>
+
+        {/* Chat Header */}
+        <header className="p-6 flex justify-between items-center z-10">
+          <h2 className="text-lg font-bold text-white">Assistant Intelligence</h2>
+          <div className="flex gap-2">
+             <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full border border-emerald-500/20">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div> System Ready
+             </span>
+          </div>
         </header>
 
-        <div className="grid lg:grid-cols-2 gap-8">
-          {/* Left Panel - Input */}
-          <div className="glass-panel bg-slate-900/40 p-6 rounded-2xl border border-white/5 backdrop-blur-xl">
-            <h2 className="text-lg font-semibold text-white mb-6">
-              Document Management & Query
-            </h2>
-            
-            {/* Document Upload Section */}
-            <div className="mb-6 p-5 bg-slate-800/30 rounded-xl border border-white/5">
-              <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-4 flex items-center gap-2"><Upload className="w-4 h-4"/> Upload Documents</h3>
-              
-              <div className="space-y-3">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept=".pdf,.txt,.docx,.eml"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-                
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="w-full bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 disabled:opacity-50 font-medium py-4 px-6 rounded-xl transition-all duration-200 flex items-center justify-center gap-3"
-                >
-                  {uploading ? (
-                    <>
-                      <TailSpin color="white" height={20} width={20} />
-                      Uploading... {uploadProgress}%
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="w-5 h-5" />
-                      Choose PDF/Document Files
-                    </>
-                  )}
-                </button>
-                
-                {uploadProgress > 0 && uploading && (
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div 
-                      className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
-                      style={{ width: `${uploadProgress}%` }}
-                    ></div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Documents List */}
-            {documents.length > 0 && (
-              <div className="mb-6 p-5 bg-slate-800/30 rounded-xl border border-white/5">
-                <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-4">Uploaded Documents ({documents.length})</h3>
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {documents.map((doc) => (
-                    <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-white/5">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-slate-200 truncate">{doc.name}</p>
-                        <p className="text-xs text-slate-500">
-                          {doc.type} • {(doc.size / 1024).toFixed(1)} KB
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => viewDocument(doc.id)}
-                          className="p-1.5 text-indigo-400 hover:bg-indigo-500/20 rounded-md transition-colors"
-                          title="View content"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => deleteDocument(doc.id)}
-                          className="p-1.5 text-red-400 hover:bg-red-500/20 rounded-md transition-colors"
-                          title="Delete document"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+        {/* Messages Area */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-8 z-10 scroll-smooth">
+          {response ? (
+            <div className="max-w-4xl mx-auto space-y-8">
+              {/* Question */}
+              <div className="flex justify-end">
+                <div className="glass-card p-4 rounded-2xl max-w-[80%] surface-high">
+                  <p className="text-sm text-slate-200">{query}</p>
                 </div>
               </div>
-            )}
-            
-            <div className="space-y-4">
-              <div className="pt-2">
-                <label htmlFor="query" className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">
-                  Ask a question about your documents:
-                </label>
-                <textarea
-                  id="query"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder="e.g., What are the key points mentioned in the first chapter?"
-                  className="w-full h-32 px-4 py-3 bg-slate-800/50 border border-white/5 rounded-xl text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 transition-colors placeholder:text-slate-600 resize-none"
-                  disabled={loading}
-                />
-              </div>
 
-              <button
+              {/* Answer */}
+              <div className="flex justify-start animate-slide-up">
+                <div className="glass-card p-6 rounded-2xl max-w-[90%] neon-border-left bg-[#0f192f]/60 relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 p-4 opacity-10">
+                    <FileText className="w-12 h-12 text-cyan-400" />
+                  </div>
+                  <h4 className="text-[10px] uppercase tracking-widest text-cyan-400 font-bold mb-4">AI Analysis Report</h4>
+                  <div className="text-slate-200 leading-relaxed text-base whitespace-pre-wrap">
+                    {response.answer}
+                  </div>
+
+                  {/* Confidence Badge */}
+                  <div className="mt-6 flex items-center gap-3">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Confidence:</span>
+                    <span className={`text-[10px] font-bold px-3 py-1 rounded-full border ${
+                      response.confidence === 'high' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                      'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                    }`}>
+                      {response.confidence?.toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-center opacity-40">
+               <div className="w-24 h-24 rounded-full bg-indigo-500/5 flex items-center justify-center mb-6 border border-indigo-500/10 pulse-secondary">
+                  <Send className="w-8 h-8 text-indigo-400" />
+               </div>
+               <h3 className="text-xl font-bold text-white mb-2">How can I assist with reporting standards?</h3>
+               <p className="text-sm max-w-md mx-auto text-slate-400 leading-relaxed">
+                 Ask questions about IFRS, GAAP, or your internal accounting policies. I'll analyze your knowledge base to provide cited answers.
+               </p>
+            </div>
+          )}
+          
+          {loading && (
+            <div className="flex justify-start max-w-4xl mx-auto">
+              <div className="glass-card p-6 rounded-2xl flex items-center gap-4">
+                <TailSpin color="#00ffff" height={24} width={24} />
+                <p className="text-sm text-cyan-300 font-medium animate-pulse">Deep scanning knowledge base...</p>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="max-w-4xl mx-auto">
+               <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 flex items-start gap-3">
+                  <XCircle className="w-5 h-5 text-red-400 shrink-0" />
+                  <div>
+                    <p className="text-sm font-bold text-red-400">Analysis Halted</p>
+                    <p className="text-xs text-red-300/70 mt-1">{error}</p>
+                  </div>
+               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Input Bar */}
+        <div className="p-6 z-10">
+           <div className="max-w-4xl mx-auto relative group">
+              <textarea
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder="Query accounting standards or policies..."
+                className="w-full input-glass p-6 pr-20 rounded-3xl text-sm text-white placeholder:text-slate-600 resize-none h-20 shadow-2xl"
+                disabled={loading}
+              />
+              <button 
                 onClick={handleProcessQuery}
                 disabled={loading || !query.trim()}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-[0_0_15px_rgba(79,70,229,0.3)] font-medium py-3.5 px-6 rounded-xl transition-all duration-200 flex items-center justify-center gap-2 text-sm"
+                className="absolute right-4 bottom-4 btn-primary-gradient p-3 rounded-2xl disabled:opacity-30 disabled:cursor-not-allowed group-hover:scale-105 transition-all"
               >
-                {loading ? (
-                  <>
-                    <TailSpin color="white" height={20} width={20} />
-                    Processing...
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-5 h-5" />
-                    Process Query
-                  </>
-                )}
+                {loading ? <TailSpin color="#060e20" height={20} width={20} /> : <Send className="w-5 h-5" />}
               </button>
-            </div>
-
-            {/* Query History */}
-            <div className="mt-6 pt-6 border-t border-white/5">
-              <h3 className="text-slate-400 text-xs font-medium mb-3 uppercase tracking-wider">Query History:</h3>
-              <div className="border border-white/5 rounded-xl max-h-48 overflow-y-auto bg-slate-900/20">
-                {queryHistory.length > 0 ? (
-                  queryHistory.map((item, index) => (
-                    <HistoryItem
-                      key={item.id} // Use the database ID as the key
-                      item={item}
-                      onQuerySelect={setQuery}
-                      onDelete={() => handleDeleteHistoryItem(item.id)}
-                    />
-                  ))
-                ) : (
-                  <p className="p-4 text-slate-500 text-sm">No query history found.</p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Right Panel - Results */}
-          <div className="glass-panel bg-slate-900/40 p-6 rounded-2xl border border-white/5 backdrop-blur-xl shrink-0 h-fit">
-            <h2 className="text-lg font-semibold text-white mb-6">
-              AI Analysis Results
-            </h2>
-
-            {loading && (
-              <div className="flex flex-col items-center justify-center py-12">
-                <TailSpin color="#818cf8" height={60} width={60} />
-                <p className="mt-4 text-slate-400">Analyzing your query against policy documents...</p>
-              </div>
-            )}
-
-            {error && (
-              <div className="bg-red-900/20 border border-red-500/20 rounded-xl p-4">
-                <div className="flex items-center gap-2">
-                  <XCircle className="w-5 h-5 text-red-400" />
-                  <span className="text-red-300 font-medium">Error</span>
-                </div>
-                <p className="text-red-400/80 mt-2 text-sm">{error}</p>
-              </div>
-            )}
-
-            {response && !loading && (
-              <div className="border rounded-xl p-6 bg-slate-800/30 border-white/5 shadow-sm">
-                
-                {/* Answer section */}
-                <div className="mb-6">
-                  <h4 className="text-xs font-semibold text-indigo-400 mb-3 uppercase tracking-wider">Answer</h4>
-                  <p className="text-slate-200 leading-relaxed text-lg whitespace-pre-wrap">
-                    {response.answer}
-                  </p>
-                </div>
-
-                {/* Relevant Quotes */}
-                {response.relevant_quotes && response.relevant_quotes.length > 0 && (
-                  <div className="mb-4">
-                    <h4 className="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wider">Relevant Quotes</h4>
-                    <ul className="list-disc pl-5 space-y-2">
-                      {response.relevant_quotes.map((quote, idx) => (
-                        <li key={idx} className="text-slate-400 italic text-sm border-l-2 border-indigo-500/30 pl-3">"{quote}"</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Confidence */}
-                <div className="mt-6 pt-4 border-t border-white/5 flex items-center justify-between">
-                  <span className="text-xs text-slate-500 font-medium uppercase tracking-wider">Confidence Level:</span>
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
-                    response.confidence === 'high' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                    response.confidence === 'medium' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                    'bg-red-500/10 text-red-400 border border-red-500/20'
-                  }`}>
-                    {response.confidence ? response.confidence.toUpperCase() : 'UNKNOWN'}
-                  </span>
-                </div>
-                
-                {/* Raw Response */}
-                <details className="mt-6">
-                  <summary className="text-sm font-medium text-slate-500 cursor-pointer hover:text-slate-300 transition-colors">
-                    View Raw AI Response
-                  </summary>
-                  <pre className="mt-3 p-4 bg-slate-900/60 border border-white/5 rounded-xl text-xs text-slate-400 overflow-x-auto">
-                    {JSON.stringify(response, null, 2)}
-                  </pre>
-                </details>
-              </div>
-            )}
-
-            {!loading && !error && !response && (
-              <div className="text-center py-12 text-slate-500">
-                <FileText className="w-16 h-16 mx-auto mb-4 text-slate-700" />
-                <p className="text-lg text-slate-300 font-medium">Submit a query</p>
-                <p className="text-sm mt-2 max-w-sm mx-auto">The system will analyze your query against your documents and provide a comprehensive answer</p>
-              </div>
-            )}
-          </div>
+           </div>
+           <p className="text-[10px] text-center text-slate-600 mt-4 font-medium uppercase tracking-widest">
+             Enterprise Intelligence Layer &bull; Premium v3.1
+           </p>
         </div>
+      </main>
 
-        {/* Footer */}
-        <div className="text-center mt-12 text-slate-600 text-sm pb-8">
-          <p>Powered by Gemini API, LangChain, and ChromaDB/Pinecone</p>
-          <p className="mt-1">Universal Document RAG Analyst</p>
+      {/* 3. Right Panel: Context & Citations */}
+      <aside className="w-80 glass-panel border-l border-white/5 flex flex-col shrink-0">
+        <div className="p-6 border-b border-white/5">
+           <h3 className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Contextual Sources</h3>
         </div>
-      </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {response?.relevant_quotes && response.relevant_quotes.length > 0 ? (
+            response.relevant_quotes.map((quote, idx) => (
+              <div key={idx} className="glass-card p-4 rounded-2xl bg-white/5 border-l-2 border-cyan-500/50 animate-fade-in" style={{ animationDelay: `${idx * 0.1}s` }}>
+                 <p className="text-[10px] text-cyan-400 font-bold mb-2 uppercase tracking-tighter">Verified Citation #{idx + 1}</p>
+                 <p className="text-xs text-slate-400 italic leading-relaxed">"{quote}"</p>
+              </div>
+            ))
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center opacity-20 grayscale">
+               <FileText className="w-12 h-12 mb-4" />
+               <p className="text-[10px] font-bold uppercase">No citations active</p>
+            </div>
+          )}
+        </div>
+        
+        {/* History Quick-Access */}
+        <div className="p-4 border-t border-white/5">
+           <h3 className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-4 px-2">Recent Queries</h3>
+           <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
+              {queryHistory.slice(0, 5).map((item) => (
+                <button 
+                  key={item.id} 
+                  onClick={() => setQuery(item.query)}
+                  className="w-full text-left p-3 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/5 transition-all group"
+                >
+                  <p className="text-[11px] text-slate-400 truncate group-hover:text-cyan-300 font-medium">{item.query}</p>
+                  <p className="text-[9px] text-slate-600 mt-1">{new Date(item.created_at).toLocaleDateString()}</p>
+                </button>
+              ))}
+           </div>
+        </div>
+      </aside>
     </div>
   );
 };
