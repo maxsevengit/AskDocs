@@ -1,19 +1,19 @@
-# Med-RAG: Medical Insurance Claims Processing System
+# Med-RAG: Medical Document RAG System
 
-A full-stack Retrieval-Augmented Generation (RAG) system for processing medical insurance claims using AI-powered document analysis.
+A full-stack Retrieval-Augmented Generation (RAG) system for analyzing uploaded documents with AI-powered answers and citations.
 
 ## 🚀 Features
 
 - **AI-Powered Claims Processing**: Uses Gemini API to analyze claims against policy documents
-- **Document Retrieval**: ChromaDB vector store for efficient document similarity search
-- **Structured Responses**: Returns JSON responses with decision, amount, and justification
+- **Document Retrieval**: PostgreSQL + pgvector for efficient document similarity search
+- **Structured Responses**: Returns JSON responses with answer, relevant quotes, and confidence
 - **Modern UI**: Clean, responsive React frontend with Tailwind CSS
 - **Real-time Processing**: Instant analysis of medical claims queries
 
 ## 🏗️ Architecture
 
 ```
-Frontend (React + Vite) → Backend (Node.js + Express) → LangChain + ChromaDB → Gemini API
+Frontend (React + Vite + Firebase Auth) → Backend (Node.js + Express) → pgvector → Gemini API
 ```
 
 ## 📁 Project Structure
@@ -28,12 +28,9 @@ rag-document-processor/
 │   ├── package.json       # Frontend dependencies
 │   └── vite.config.js     # Vite configuration
 ├── server/                 # Node.js backend
-│   ├── documents/         # Policy documents
-│   │   ├── policy_doc_1.txt
-│   │   ├── policy_doc_2.txt
-│   │   ├── policy_doc_3.txt
-│   │   └── policy_doc_4.txt
 │   ├── index.js           # Express server + RAG pipeline
+│   ├── database.js        # PostgreSQL + pgvector initialization
+│   ├── uploads/           # Uploaded files
 │   ├── package.json       # Backend dependencies
 │   └── .env               # Environment variables
 └── README.md              # This file
@@ -52,20 +49,21 @@ rag-document-processor/
 ### Backend
 - **Node.js** - JavaScript runtime
 - **Express** - Web framework
-- **LangChain.js** - LLM application framework
-- **ChromaDB** - Vector database for embeddings
-- **HuggingFace Embeddings** - Text embedding model
+- **LangChain.js** - Text splitting utilities
+- **PostgreSQL + pgvector** - Vector storage and similarity search
+- **Xenova Transformers** - Local embeddings (fallback available)
 - **Axios** - HTTP client for Gemini API calls
 
 ### AI Services
 - **Gemini API** - Google's latest LLM for claims analysis
-- **HuggingFace** - Free text embeddings (alternative to paid services)
+- **Firebase Auth** - Email/password + Google OAuth
 
 ## 📋 Prerequisites
 
 - Node.js 18+ and npm
 - Gemini API key from Google AI Studio
-- (Optional) HuggingFace API key for better embeddings
+- PostgreSQL with pgvector (or Docker Compose)
+- Firebase project (for client auth)
 
 ## 🚀 Setup Instructions
 
@@ -85,8 +83,11 @@ npm install
 # Edit .env file and add your Gemini API key:
 # GEMINI_API_KEY="your_actual_api_key_here"
 
-# Optional: Add HuggingFace API key for better embeddings
-# HUGGINGFACE_API_KEY="your_hf_api_key_here"
+# Optional: JWT_SECRET and mailer settings
+# JWT_SECRET="your_jwt_secret_here"
+# MAIL_USER="your_mail_user"
+# MAIL_PASS="your_mail_pass"
+# MAIL_FROM="your_mail_from"
 ```
 
 ### 3. Frontend Setup
@@ -95,6 +96,17 @@ cd ../client
 
 # Install dependencies
 npm install
+```
+
+Create a `client/.env` file for Firebase:
+```
+VITE_FIREBASE_API_KEY="..."
+VITE_FIREBASE_AUTH_DOMAIN="..."
+VITE_FIREBASE_PROJECT_ID="..."
+VITE_FIREBASE_STORAGE_BUCKET="..."
+VITE_FIREBASE_MESSAGING_SENDER_ID="..."
+VITE_FIREBASE_APP_ID="..."
+VITE_FIREBASE_MEASUREMENT_ID="..."
 ```
 
 ### 4. Start the Application
@@ -113,6 +125,12 @@ npm run dev
 ```
 The frontend will start on port 5173.
 
+### 5. Docker (Optional)
+```bash
+docker-compose up --build
+```
+This will start Postgres + backend + frontend. Frontend will be available at `http://localhost:5173`.
+
 ### 5. Access the Application
 Open your browser and navigate to: `http://localhost:5173`
 
@@ -126,13 +144,9 @@ Open your browser and navigate to: `http://localhost:5173`
    GEMINI_API_KEY="your_api_key_here"
    ```
 
-### HuggingFace API (Optional)
-1. Visit [HuggingFace](https://huggingface.co/settings/tokens)
-2. Create a new access token
-3. Add it to `server/.env`:
-   ```
-   HUGGINGFACE_API_KEY="your_token_here"
-   ```
+### Firebase Auth Setup
+1. Create a Firebase project and enable Email/Password + Google providers
+2. Add the Firebase web config to `client/.env`
 
 ## 📖 Usage
 
@@ -143,9 +157,7 @@ Open your browser and navigate to: `http://localhost:5173`
 
 ### 2. View Results
 - The right panel displays AI analysis results
-- See the decision (approved/rejected)
-- View the approved amount (if applicable)
-- Read the detailed justification
+- Read the answer and relevant quotes
 - Expand "View Raw AI Response" for technical details
 
 ### 3. Example Queries
@@ -156,23 +168,18 @@ Open your browser and navigate to: `http://localhost:5173`
 
 ## 🔍 How It Works
 
-1. **Document Loading**: Server loads policy documents from the `documents/` folder
-2. **Text Processing**: Documents are split into chunks using LangChain's text splitter
+1. **Document Upload**: Users upload documents via the UI
+2. **Text Processing**: Documents are split into chunks using a text splitter
 3. **Embedding Generation**: Text chunks are converted to vector embeddings
-4. **Vector Storage**: Embeddings are stored in ChromaDB for similarity search
-5. **Query Processing**: User queries are converted to embeddings and compared
-6. **Document Retrieval**: Top 5 most relevant document chunks are retrieved
+4. **Vector Storage**: Embeddings are stored in pgvector for similarity search
+5. **Query Processing**: User queries are embedded and compared
+6. **Document Retrieval**: Top relevant chunks are retrieved
 7. **AI Analysis**: Gemini API analyzes the query against retrieved context
-8. **Response Generation**: Structured JSON response with decision and justification
+8. **Response Generation**: Structured JSON response with answer and confidence
 
-## 📊 Policy Documents
+## 📄 Documents
 
-The system includes 4 sample policy documents:
-
-- **Clause 10.1**: 6-month waiting period for joint surgeries
-- **Clause 12.5**: Age coverage (18-60 years)
-- **Clause 15.3**: Location-based payout limits (Tier-1 cities: $5,000, others: $3,000)
-- **Clause 11.2**: Minimum age requirement (6 months)
+Upload your own policy or reference documents through the UI. The system indexes only the documents you upload.
 
 ## 🧪 Testing
 
@@ -194,7 +201,7 @@ Test the backend health: `GET http://localhost:3001/health`
 
 2. **"Unable to connect to server"**
    - Ensure backend is running on port 3001
-   - Check if port 3001 is available
+   - Ensure PostgreSQL with pgvector is running
 
 3. **"Invalid request to Gemini API"**
    - Verify your API key in `.env`
@@ -210,9 +217,8 @@ Enable detailed logging by checking the server console output.
 ## 🔧 Development
 
 ### Adding New Documents
-1. Add `.txt` files to `server/documents/`
-2. Restart the server
-3. Documents are automatically loaded and indexed
+1. Upload documents via the UI
+2. Documents are automatically indexed
 
 ### Modifying the RAG Pipeline
 - Edit `server/index.js` to change chunk sizes, similarity search parameters
@@ -224,23 +230,21 @@ Enable detailed logging by checking the server console output.
 
 ## 📈 Performance
 
-- **Document Loading**: ~2-3 seconds on startup
 - **Query Processing**: ~3-5 seconds (depends on Gemini API response time)
 - **Vector Search**: Sub-second similarity search
-- **Memory Usage**: ~100-200MB for in-memory ChromaDB
 
 ## 🔒 Security Notes
 
 - API keys are stored in `.env` files (never commit these)
 - CORS is configured for local development only
-- Consider adding authentication for production use
+- Firebase auth is required to access protected API endpoints
 
 ## 🚀 Production Deployment
 
 For production deployment:
 
 1. **Environment Variables**: Use proper secret management
-2. **Database**: Replace in-memory ChromaDB with persistent storage
+2. **Database**: Ensure pgvector is backed by persistent storage
 3. **Authentication**: Add user authentication and authorization
 4. **Rate Limiting**: Implement API rate limiting
 5. **Monitoring**: Add logging and monitoring

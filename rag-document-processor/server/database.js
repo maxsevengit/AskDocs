@@ -1,8 +1,14 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+const connectionString = process.env.DATABASE_URL_LOCAL || process.env.DATABASE_URL;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/medrag'
+  connectionString,
+  ssl: connectionString && (connectionString.includes('localhost') || connectionString.includes('127.0.0.1')) ? false : { rejectUnauthorized: false },
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
 });
 
 pool.on('error', (err) => {
@@ -48,7 +54,9 @@ const initDb = async () => {
       id TEXT PRIMARY KEY,
       username TEXT,
       email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL
+      password_hash TEXT NOT NULL,
+      is_verified BOOLEAN DEFAULT FALSE,
+      verified_at TEXT
     );
   `;
 
@@ -89,25 +97,37 @@ const initDb = async () => {
   `;
 
   try {
+    console.log('Connecting to PostgreSQL...');
     const client = await pool.connect();
     try {
+      console.log('Connection established, running schema initialization...');
       await client.query('BEGIN');
       await client.query('CREATE EXTENSION IF NOT EXISTS vector;');
+      
+      // Run each schema part
       await client.query(usersSchema);
       await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;');
+      await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;');
+      await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_at TEXT;');
+      
       await client.query(documentsSchema);
       await client.query(queryHistorySchema);
       await client.query(documentChunksSchema);
+      
       await client.query('COMMIT');
       console.log('PostgreSQL database tables and pgvector initialized.');
     } catch (e) {
       await client.query('ROLLBACK');
-      console.error('Error creating PostgreSQL tables:', e.message);
+      console.error('Error during schema initialization:', e.message);
+      // Don't exit here, let the app try to run
     } finally {
       client.release();
     }
   } catch (err) {
-    console.error('Connected to PostgreSQL failed:', err.message);
+    console.error('CRITICAL: Database connection failed:', err.message);
+    if (err.code === 'ECONNRESET') {
+      console.error('Connection reset by peer. This is often a network or firewall issue.');
+    }
   }
 };
 

@@ -10,6 +10,7 @@ const { simpleParser } = require('mailparser');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 const { db, initDb, pool } = require('./database');
 
 let pineconeClient = null;
@@ -42,6 +43,14 @@ function cosineSimilarity(vecA, vecB) {
 // Load environment variables
 dotenv.config();
 
+console.log('--- Environment Check ---');
+if (process.env.GEMINI_API_KEY) {
+  console.log('GEMINI_API_KEY: FOUND (ends in ...' + process.env.GEMINI_API_KEY.slice(-4) + ')');
+} else {
+  console.error('GEMINI_API_KEY: NOT FOUND IN .env');
+}
+console.log('-------------------------');
+
 const app = express();
 const PORT = 3001;
 
@@ -55,12 +64,50 @@ app.use(express.json());
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-default-secret-key';
 
+// --- NODEMAILER SETUP ---
+const mailer = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.MAIL_USER,
+    pass: process.env.MAIL_PASS
+  }
+});
+
+const sendCongratsEmail = (email, username) => {
+  mailer.sendMail({
+    from: process.env.MAIL_FROM,
+    to: email,
+    subject: '🎉 Welcome to AskDocs — Account Verified!',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 560px; margin: auto; background: #0f172a; color: #e2e8f0; border-radius: 12px; overflow: hidden;">
+        <div style="background: linear-gradient(135deg, #4f46e5, #7c3aed); padding: 32px; text-align: center;">
+          <h1 style="margin: 0; font-size: 28px; color: #fff;">🎉 You're In!</h1>
+        </div>
+        <div style="padding: 32px;">
+          <p style="font-size: 18px;">Hi <strong>${username}</strong>,</p>
+          <p>Your email has been verified and your <strong>AskDocs</strong> account is now fully activated. Welcome aboard!</p>
+          <p>You can now upload documents and ask intelligent AI-powered questions about them.</p>
+          <div style="margin: 32px 0; text-align: center;">
+            <a href="http://localhost:5173" style="background: #4f46e5; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
+              Open AskDocs →
+            </a>
+          </div>
+          <p style="font-size: 12px; color: #64748b;">If you didn't create this account, you can safely ignore this email.</p>
+        </div>
+      </div>
+    `
+  }, (err) => {
+    if (err) console.error('Failed to send congrats email:', err.message);
+    else console.log(`Congrats email sent to ${email}`);
+  });
+};
+
 // Auth middleware
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
-  if (token == null) return res.sendStatus(401); // if there isn't any token
+  if (token == null) return res.sendStatus(401);
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.sendStatus(403);
@@ -69,46 +116,94 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Helper: decode & validate a Firebase ID token (JWT)
+const decodeFirebaseToken = (token) => {
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('Invalid token format');
+  const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+  const { email, name, email_verified, iss, exp } = payload;
+  if (Date.now() / 1000 > exp) throw new Error('Token has expired');
+  if (!iss.startsWith('https://securetoken.google.com/')) throw new Error('Token not issued by Firebase');
+  return { email, name, email_verified };
+};
+
 // --- AUTH ROUTES ---
+
+// Unified Firebase auth endpoint (handles both Google OAuth and email/password)
+app.post('/api/auth/firebase', async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'Token is required' });
+
+  try {
+    const { email, name, email_verified } = decodeFirebaseToken(token);
+
+    if (!email_verified) {
+      return res.status(403).json({ error: 'Please verify your email first. Check your inbox for a verification link.' });
+    }
+
+    if (!email.endsWith('@gmail.com') && !email.endsWith('@googlemail.com')) {
+      return res.status(403).json({ error: 'Only @gmail.com accounts are allowed.' });
+    }
+
+    const displayName = name || email.split('@')[0];
+
+    const findSql = 'SELECT * FROM users WHERE email = ?';
+    db.get(findSql, [email], (err, user) => {
+      if (err) return res.status(500).json({ error: 'Database error' });
+
+      if (user) {
+        // Existing user — check if this is first verified login (send congrats email)
+        if (!user.is_verified) {
+          const verifiedAt = new Date().toISOString();
+          db.run('UPDATE users SET is_verified = TRUE, verified_at = ? WHERE id = ?', [verifiedAt, user.id], () => {
+            sendCongratsEmail(user.email, user.username || displayName);
+          });
+        }
+        const jwtToken = jwt.sign({ id: user.id, email: user.email, username: user.username }, JWT_SECRET, { expiresIn: '8h' });
+        return res.json({ token: jwtToken, user: { id: user.id, email: user.email, username: user.username } });
+      } else {
+        // New user — create account (Google sign-up path or email already verified on first use)
+        const id = uuidv4();
+        const mockPasswordHash = 'OAUTH_USER_' + uuidv4();
+        const verifiedAt = new Date().toISOString();
+        const insertSql = 'INSERT INTO users (id, username, email, password_hash, is_verified, verified_at) VALUES (?, ?, ?, ?, TRUE, ?)';
+
+        db.run(insertSql, [id, displayName, email, mockPasswordHash, verifiedAt], function (insertErr) {
+          if (insertErr) {
+            console.error('Failed to insert Firebase user:', insertErr.message);
+            return res.status(500).json({ error: 'Failed to create account' });
+          }
+          sendCongratsEmail(email, displayName);
+          const jwtToken = jwt.sign({ id, email, username: displayName }, JWT_SECRET, { expiresIn: '8h' });
+          res.status(201).json({ token: jwtToken, user: { id, email, username: displayName } });
+        });
+      }
+    });
+  } catch (error) {
+    console.error('Firebase token processing failed:', error.message);
+    res.status(401).json({ error: error.message });
+  }
+});
+
+// Legacy email/password signup (creates DB record; Firebase handles email verification)
 app.post('/api/auth/signup', (req, res) => {
   const { email, username, password } = req.body;
   if (!email || !username || !password) {
     return res.status(400).json({ error: 'Email, username, and password are required' });
   }
-
   const salt = bcrypt.genSaltSync(10);
   const password_hash = bcrypt.hashSync(password, salt);
   const id = uuidv4();
-
-  const sql = 'INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)';
+  const sql = 'INSERT INTO users (id, username, email, password_hash, is_verified) VALUES (?, ?, ?, ?, FALSE)';
   db.run(sql, [id, username, email, password_hash], function (err) {
     if (err) {
       console.error('Signup error:', err.message);
-      return res.status(500).json({ error: 'Email or Username may already be in use.' });
+      if (err.message.includes('unique') || err.message.includes('already exists')) {
+        return res.status(409).json({ error: 'Email or Username may already be in use.' });
+      }
+      return res.status(500).json({ error: 'A database error occurred during signup.' });
     }
     res.status(201).json({ message: 'User created successfully' });
-  });
-});
-
-app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
-  }
-
-  const sql = 'SELECT * FROM users WHERE email = ?';
-  db.get(sql, [email], (err, user) => {
-    if (err || !user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const isMatch = bcrypt.compareSync(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const token = jwt.sign({ id: user.id, email: user.email, username: user.username }, JWT_SECRET, { expiresIn: '24h' });
-    res.json({ token, user: { id: user.id, email: user.email, username: user.username } });
   });
 });
 
@@ -141,12 +236,12 @@ app.put('/api/auth/profile', authenticateToken, (req, res) => {
 
     const updates = [];
     const params = [];
-    
+
     if (newUsername && newUsername !== user.username) {
       updates.push('username = ?');
       params.push(newUsername);
     }
-    
+
     if (newPassword && newPassword.length > 0) {
       const salt = bcrypt.genSaltSync(10);
       updates.push('password_hash = ?');
@@ -161,12 +256,12 @@ app.put('/api/auth/profile', authenticateToken, (req, res) => {
     const updateSql = "UPDATE users SET " + updates.join(', ') + " WHERE id = ?";
     db.run(updateSql, params, function (updateErr) {
       if (updateErr) return res.status(500).json({ error: 'Failed to update profile.' });
-      
-      const newJwtToken = jwt.sign({ id: user.id, email: user.email, username: newUsername || user.username }, JWT_SECRET, { expiresIn: '24h' });
+      const newJwtToken = jwt.sign({ id: user.id, email: user.email, username: newUsername || user.username }, JWT_SECRET, { expiresIn: '8h' });
       res.json({ message: 'Profile updated successfully', token: newJwtToken, user: { id: user.id, email: user.email, username: newUsername || user.username } });
     });
   });
 });
+
 
 // Global variables for RAG pipeline
 let vectorStore;
@@ -434,10 +529,10 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
     }
 
     console.log(`Searching for query: "${query}"`);
-    const allSearchResults = await vectorStore.similaritySearch(query, 20);
+    const allSearchResults = await vectorStore.similaritySearch(query, 10);
     console.log(`Found ${allSearchResults.length} total matches`);
 
-    const searchResults = allSearchResults.filter(result => userDocIds.includes(result.metadata.docId)).slice(0, 8);
+    const searchResults = allSearchResults.filter(result => userDocIds.includes(result.metadata.docId)).slice(0, 5);
     console.log(`Filtered to ${searchResults.length} user documents`);
 
     const context = searchResults.map(doc => doc.pageContent).join('\n\n');
@@ -450,7 +545,9 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
       });
     }
 
-    console.log('Retrieved context from documents:', context.substring(0, 500) + '...');
+    // Truncate context to max 3000 chars to stay within free-tier token limits
+    const truncatedContext = context.length > 3000 ? context.substring(0, 3000) + '...' : context;
+    console.log(`Sending ${truncatedContext.length} chars of context to LLM`);
 
     const ragPrompt = `You are an intelligent document analysis assistant. Your goal is to be as helpful as possible, using the provided document context to answer the user's question.
 
@@ -461,7 +558,7 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
     4. Always be polite and professional.
 
     Document Context:
-    ${context}
+    ${truncatedContext}
 
     User Question: ${query}
 
@@ -469,11 +566,14 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
 
     let finalResponse;
     try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) throw new Error('GEMINI_API_KEY is not configured in .env');
+
       const geminiResponse = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
         {
           contents: [{ parts: [{ text: ragPrompt }] }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 2048, responseMimeType: "application/json" }
+          generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
         },
         { headers: { 'Content-Type': 'application/json' } }
       );
@@ -513,11 +613,27 @@ app.post('/api/process-query', authenticateToken, async (req, res) => {
 
     } catch (e) {
       console.error('LLM response generation failed:', e.message);
-      console.error('Error details:', e.response?.data || e);
+      if (e.response) {
+        console.error('API Error Response Status:', e.response.status);
+        console.error('API Error Response Data:', JSON.stringify(e.response.data, null, 2));
+      } else {
+        console.error('Error details:', e);
+      }
 
-      // Provide a more helpful fallback response
+
+      // Provide a clear, user-friendly error based on the error type
+      let userFacingAnswer;
+      if (e.response?.status === 429) {
+        const retryInfo = e.response?.data?.error?.details?.find(d => d['@type']?.includes('RetryInfo'));
+        const delay = retryInfo?.retryDelay || 'a few minutes';
+        userFacingAnswer = `⚠️ AI API quota limit reached. The Gemini free tier has a daily request limit that has been exhausted. Please try again in ${delay === 'a few minutes' ? 'a few minutes' : delay} or tomorrow when the quota resets.`;
+      } else if (!apiKey) {
+        userFacingAnswer = '⚠️ AI is not configured. Please contact the administrator.';
+      } else {
+        userFacingAnswer = '⚠️ The AI encountered an unexpected error. Please try rephrasing your question.';
+      }
       finalResponse = {
-        answer: 'I found relevant information but encountered a technical issue formatting the response. Please try rephrasing.',
+        answer: userFacingAnswer,
         relevant_quotes: [],
         confidence: 'low'
       };
@@ -577,7 +693,7 @@ app.get('/health', (req, res) => {
 // Start server
 async function startServer() {
   try {
-    initDb();
+    await initDb();
     await initializeRAG();
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);

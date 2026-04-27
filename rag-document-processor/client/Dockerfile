@@ -1,5 +1,4 @@
-# Stage 1: Build the React application
-FROM node:18-alpine as builder
+FROM node:20-alpine
 
 WORKDIR /app
 
@@ -8,20 +7,6 @@ RUN npm install
 
 COPY . .
 
-# Build the app to the 'dist' folder
-RUN npm run build
+EXPOSE 5173
 
-# Stage 2: Serve the app with Nginx
-FROM nginx:alpine
-
-# Copy the built assets to Nginx's html folder
-COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Replace default nginx config with our SPA config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Expose port (default for Nginx is 80)
-EXPOSE 80
-
-# Start Nginx
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["npm", "run", "dev", "--", "--host"]
